@@ -31,6 +31,8 @@ import pascal.taie.language.classes.JMethod;
 import pascal.taie.language.classes.Subsignature;
 
 import java.util.ArrayDeque;
+import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Set;
 
@@ -51,6 +53,21 @@ class CHABuilder implements CGBuilder<Invoke, JMethod> {
         DefaultCallGraph callGraph = new DefaultCallGraph();
         callGraph.addEntryMethod(entry);
         // TODO - finish me
+        Queue<JMethod> WL = new LinkedList<>();
+        WL.offer(entry);
+        while (!WL.isEmpty()) {
+            JMethod m = WL.poll();
+            if (!callGraph.reachableMethods.contains(m)) {
+                callGraph.addReachableMethod(m);
+                for (Invoke callsite : callGraph.getCallSitesIn(m)) {
+                    Set<JMethod> T = resolve(callsite);
+                    for (JMethod m1 : T) {
+                        WL.offer(m1);
+                        callGraph.addEdge(new Edge<Invoke, JMethod>(CallGraphs.getCallKind(callsite), callsite, m1));
+                    }
+                }
+            }
+        }
         return callGraph;
     }
 
@@ -59,17 +76,52 @@ class CHABuilder implements CGBuilder<Invoke, JMethod> {
      */
     private Set<JMethod> resolve(Invoke callSite) {
         // TODO - finish me
-        return null;
+        Set<JMethod> T = new HashSet<>();
+        MethodRef method = callSite.getMethodRef();
+        if (CallGraphs.getCallKind(callSite) == CallKind.STATIC) {
+            T.add(method.getDeclaringClass().getDeclaredMethod(method.getSubsignature()));
+        } else if (CallGraphs.getCallKind(callSite) == CallKind.SPECIAL) {
+            T.add(dispatch(method.getDeclaringClass(), method.getSubsignature()));
+            // could be null
+        } else if (CallGraphs.getCallKind(callSite) == CallKind.VIRTUAL
+                || CallGraphs.getCallKind(callSite) == CallKind.INTERFACE) {
+            // bfs
+            Queue<JClass> q = new LinkedList<>();
+            JClass c = method.getDeclaringClass();
+            q.offer(c);
+            while (!q.isEmpty()) {
+                JClass ci = q.poll();
+                T.add(dispatch(ci, method.getSubsignature()));
+                if (!ci.isInterface()) {
+                    q.addAll(hierarchy.getDirectSubclassesOf(ci));
+                } else {
+                    q.addAll(hierarchy.getDirectSubinterfacesOf(ci));
+                    q.addAll(hierarchy.getDirectImplementorsOf(ci));
+                }
+            }
+        }
+        T.remove(null);
+        return T;
     }
 
     /**
      * Looks up the target method based on given class and method subsignature.
      *
      * @return the dispatched target method, or null if no satisfying method
-     * can be found.
+     *         can be found.
      */
     private JMethod dispatch(JClass jclass, Subsignature subsignature) {
         // TODO - finish me
-        return null;
+        if (jclass == null)
+            return null;
+        if (jclass.getDeclaredMethod(subsignature) == null) {
+            return dispatch(jclass.getSuperClass(), subsignature);
+        } else {
+            if (jclass.getDeclaredMethod(subsignature).isAbstract()) {
+                return dispatch(jclass.getSuperClass(), subsignature);
+            } else {
+                return jclass.getDeclaredMethod(subsignature);
+            }
+        }
     }
 }

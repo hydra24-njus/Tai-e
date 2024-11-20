@@ -22,6 +22,8 @@
 
 package pascal.taie.analysis.dataflow.inter;
 
+import java.util.List;
+
 import pascal.taie.analysis.dataflow.analysis.constprop.CPFact;
 import pascal.taie.analysis.dataflow.analysis.constprop.ConstantPropagation;
 import pascal.taie.analysis.graph.cfg.CFG;
@@ -77,36 +79,64 @@ public class InterConstantPropagation extends
     @Override
     protected boolean transferCallNode(Stmt stmt, CPFact in, CPFact out) {
         // TODO - finish me
-        return false;
+        return out.copyFrom(in);
     }
 
     @Override
     protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
         // TODO - finish me
-        return false;
+        return cp.transferNode(stmt, in, out);
     }
 
     @Override
     protected CPFact transferNormalEdge(NormalEdge<Stmt> edge, CPFact out) {
         // TODO - finish me
-        return null;
+        return out.copy();
     }
 
     @Override
     protected CPFact transferCallToReturnEdge(CallToReturnEdge<Stmt> edge, CPFact out) {
         // TODO - finish me
-        return null;
+        Invoke callSite = (Invoke) edge.getSource();
+        Var target = callSite.getResult();
+        CPFact ret = out.copy();
+        if(target != null){
+            ret.remove(target);
+        }
+        return ret;
     }
 
     @Override
     protected CPFact transferCallEdge(CallEdge<Stmt> edge, CPFact callSiteOut) {
         // TODO - finish me
-        return null;
+        Invoke callSite= (Invoke) edge.getSource();
+        List<Var> args=edge.getCallee().getIR().getParams();
+        CPFact ret=new CPFact();
+        if(args.size()!=callSite.getInvokeExp().getArgCount()){
+            //参数个数不一致
+            //Do something
+            return ret;
+        }
+        for(int i=0;i<args.size();i++){
+            ret.update(args.get(i), callSiteOut.get(callSite.getInvokeExp().getArg(i)));
+        }
+        return ret;
     }
 
     @Override
     protected CPFact transferReturnEdge(ReturnEdge<Stmt> edge, CPFact returnOut) {
         // TODO - finish me
-        return null;
+        Invoke callSite= (Invoke) edge.getCallSite();
+        Var target=callSite.getResult();
+        CPFact ret=new CPFact();
+        if(target==null){
+            // Do something
+            return ret;
+        }
+        for(Var var:edge.getReturnVars()){
+            ret.update(target,cp.meetValue(ret.get(target), returnOut.get(var)));
+        }
+
+        return ret;
     }
 }
