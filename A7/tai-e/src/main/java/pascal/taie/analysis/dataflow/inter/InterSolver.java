@@ -62,28 +62,36 @@ class InterSolver<Method, Node, Fact> {
 
     private void initialize() {
         // TODO - finish me
+        workList=new LinkedList<>(icfg.getNodes());
         icfg.forEach(node->{
+            result.setInFact(node, analysis.newInitialFact());
             result.setOutFact(node, analysis.newInitialFact());
         });
         icfg.entryMethods().forEach(method -> {
             Node entry = icfg.getEntryOf(method);
+            result.setInFact(entry, analysis.newInitialFact());
             result.setOutFact(entry, analysis.newBoundaryFact(entry));
         });
     }
 
     private void doSolve() {
         // TODO - finish me
-        Queue<Node> worklist = new LinkedList<>(icfg.getNodes());
-        while(!worklist.isEmpty()){
-            Node node = worklist.poll();
-            var in = new CPFact();
+        icfg.getNodes().forEach(workList::offer);
+        while(!workList.isEmpty()){
+            Node node = workList.poll();
             for(var prev_edge :icfg.getInEdgesOf(node)){
                 Fact prev_out=result.getOutFact(prev_edge.getSource());
-                analysis.meetInto(analysis.transferEdge(prev_edge, prev_out), (Fact)in);
+                analysis.meetInto(analysis.transferEdge(prev_edge, prev_out), result.getInFact(node));
             }
-            if(analysis.transferNode(node,(Fact)in,result.getOutFact(node))){
-                icfg.getSuccsOf(node).forEach(worklist::offer);
+            if(analysis.transferNode(node,result.getInFact(node),result.getOutFact(node))){
+                icfg.getSuccsOf(node).forEach(workList::offer);
             }
         }
+    }
+    public DataflowResult<Node, Fact> getResult(){
+        return result;
+    }
+    public Queue<Node> getWorkList(){
+        return workList;
     }
 }
