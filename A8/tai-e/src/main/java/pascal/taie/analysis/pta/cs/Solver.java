@@ -22,6 +22,8 @@
 
 package pascal.taie.analysis.pta.cs;
 
+import java.util.*;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import pascal.taie.World;
@@ -50,18 +52,21 @@ import pascal.taie.analysis.pta.pts.PointsToSet;
 import pascal.taie.analysis.pta.pts.PointsToSetFactory;
 import pascal.taie.config.AnalysisOptions;
 import pascal.taie.ir.exp.InvokeExp;
+import pascal.taie.ir.exp.InvokeInstanceExp;
 import pascal.taie.ir.exp.Var;
 import pascal.taie.ir.stmt.Copy;
 import pascal.taie.ir.stmt.Invoke;
 import pascal.taie.ir.stmt.LoadArray;
 import pascal.taie.ir.stmt.LoadField;
 import pascal.taie.ir.stmt.New;
+import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.StmtVisitor;
 import pascal.taie.ir.stmt.StoreArray;
 import pascal.taie.ir.stmt.StoreField;
 import pascal.taie.language.classes.JField;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.language.type.Type;
+import pascal.taie.util.collection.Pair;
 
 public class Solver {
 
@@ -83,6 +88,8 @@ public class Solver {
 
     private TaintAnalysiss taintAnalysis;
 
+    private Map<CSVar, Set<Invoke>> taintTransfers;
+
     private PointerAnalysisResult result;
 
     Solver(AnalysisOptions options, HeapModel heapModel,
@@ -90,6 +97,7 @@ public class Solver {
         this.options = options;
         this.heapModel = heapModel;
         this.contextSelector = contextSelector;
+        this.taintTransfers = new HashMap<>();
     }
 
     public AnalysisOptions getOptions() {
@@ -209,8 +217,34 @@ public class Solver {
                         }
                     }
                 }
+                if(taintAnalysis.getTaintSource(stmt, m)!=null && stmt.getLValue()!=null){
+                    Pointer ptr = csManager.getCSVar(contextSelector.selectContext(csManager.getCSCallSite(context, stmt), m), csManager.getCSCallSite(context, stmt).getCallSite().getLValue());
+                    PointsToSet pts = PointsToSetFactory.make(csManager.getCSObj(contextSelector.getEmptyContext(), taintAnalysis.getTaintSource(stmt, m)));
+                    workList.addEntry(ptr, pts);
+                }
+            }
+            List<Stmt> stmts = csMethod.getMethod().getIR().getStmts();
+            for(Stmt s: stmts){
+                if(s instanceof Invoke inv){
+                    inv.getInvokeExp().getArgs().forEach(arg -> {
+                        CSVar csvar = csManager.getCSVar(context, arg);
+                        Set<Invoke> invokes = taintTransfers.getOrDefault(csvar, new HashSet<>());
+                        invokes.add(inv);
+                        taintTransfers.put(csvar, invokes);
+                    });
+                }
             }
             return null;
+        }
+    }
+
+
+    private void transferTaint(CSCallSite csCallSite, JMethod callee, CSVar base) {
+        Set<Pair<Var, Obj>>res =  taintAnalysis.TaintTransfer(csCallSite, callee, base);
+        for(Pair<Var, Obj> pair: res){
+            Pointer ptr = csManager.getCSVar(csCallSite.getContext(), pair.first());
+            PointsToSet pts = PointsToSetFactory.make(csManager.getCSObj(contextSelector.getEmptyContext(), pair.second()));
+            workList.addEntry(ptr, pts);
         }
     }
 
@@ -256,6 +290,22 @@ public class Solver {
                                 csManager.getCSVar(csvar.getContext(), stmt.getLValue()));
                     });
                     processCall(csvar, obj);
+                    if(taintAnalysis.isTaint(obj.getObject())) {
+                        Set<Invoke> invokes = taintTransfers.getOrDefault(csvar, new HashSet<>());
+                        Context ctx = csvar.getContext();
+                        for(Invoke inv: invokes){
+                            CSCallSite csCallSite = csManager.getCSCallSite(ctx, inv);
+                            if(inv.getInvokeExp() instanceof InvokeInstanceExp invokeInstanceExp) {
+                                CSVar var = csManager.getCSVar(ctx, invokeInstanceExp.getBase());
+                                result.getPointsToSet(var).forEach(recvobj -> {
+                                    transferTaint(csCallSite, resolveCallee(recvobj, inv), var);
+                                });
+                            }
+                            else {
+                                transferTaint(csCallSite, resolveCallee(null, inv), null);
+                            }
+                        }
+                    }
                 });
             }
         }
@@ -291,7 +341,11 @@ public class Solver {
             JMethod m = resolveCallee(recvObj, stmt);
             Context ct = contextSelector.selectContext(csManager.getCSCallSite(recv.getContext(), stmt), recvObj, m);
             workList.addEntry(csManager.getCSVar(ct, m.getIR().getThis()), PointsToSetFactory.make(recvObj));
-
+            if(taintAnalysis.getTaintSource(stmt, m) != null && stmt.getLValue() != null){
+                Pointer ptr = csManager.getCSVar(csManager.getCSCallSite(recv.getContext(), stmt).getContext(), stmt.getLValue());
+                PointsToSet pts = PointsToSetFactory.make(csManager.getCSObj(contextSelector.getEmptyContext(), taintAnalysis.getTaintSource(stmt, m)));
+                workList.addEntry(ptr, pts);
+            }
             if (callGraph.addEdge(new Edge<CSCallSite, CSMethod>(CallGraphs.getCallKind(stmt),
                     csManager.getCSCallSite(recv.getContext(), stmt), csManager.getCSMethod(ct, m)))) {
                 addReachable(csManager.getCSMethod(ct, m));
@@ -306,6 +360,7 @@ public class Solver {
                     }
                 }
             }
+            transferTaint(csManager.getCSCallSite(recv.getContext(), stmt), m, recv);
         });
     }
 
