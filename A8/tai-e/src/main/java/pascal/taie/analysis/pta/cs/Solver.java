@@ -199,7 +199,11 @@ public class Solver {
         public Void visit(Invoke stmt) {
             if (CallGraphs.getCallKind(stmt) == CallKind.STATIC) {
                 JMethod m = resolveCallee(null, stmt);
-
+                if(taintAnalysis.getTaintSource(csManager.getCSCallSite(context, stmt).getCallSite(), m) != null && csManager.getCSCallSite(context, stmt).getCallSite().getLValue() != null){
+                    Pointer ptr = csManager.getCSVar(csManager.getCSCallSite(context, stmt).getContext(), csManager.getCSCallSite(context, stmt).getCallSite().getLValue());
+                    PointsToSet pts = PointsToSetFactory.make(csManager.getCSObj(contextSelector.getEmptyContext(), taintAnalysis.getTaintSource(csManager.getCSCallSite(context, stmt).getCallSite(), m)));
+                    workList.addEntry(ptr, pts);
+                }
                 if (callGraph.addEdge(new Edge<CSCallSite, CSMethod>(
                         CallGraphs.getCallKind(stmt),
                         csManager.getCSCallSite(context, stmt),
@@ -217,11 +221,7 @@ public class Solver {
                         }
                     }
                 }
-                if(taintAnalysis.getTaintSource(stmt, m)!=null && stmt.getLValue()!=null){
-                    Pointer ptr = csManager.getCSVar(contextSelector.selectContext(csManager.getCSCallSite(context, stmt), m), csManager.getCSCallSite(context, stmt).getCallSite().getLValue());
-                    PointsToSet pts = PointsToSetFactory.make(csManager.getCSObj(contextSelector.getEmptyContext(), taintAnalysis.getTaintSource(stmt, m)));
-                    workList.addEntry(ptr, pts);
-                }
+                transferTaint(csManager.getCSCallSite(context, stmt), m, null);
             }
             List<Stmt> stmts = csMethod.getMethod().getIR().getStmts();
             for(Stmt s: stmts){
